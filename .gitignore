@@ -1,0 +1,12 @@
+﻿.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+graphature_project/data/*.bib
+graphature_project/data/*.yaml
+graphature_project/data/*.yml
+graphature_project/data/*.json
+graphature_project/exports/*
+!graphature_project/exports/.gitkeep
+!graphature_project/data/.gitkeep
+!graphature_project/notes/.gitkeep

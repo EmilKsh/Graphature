@@ -1,0 +1,29 @@
+﻿papers:
+  muller2007pbd:
+    topic: ["PBD", "constraints", "real-time simulation"]
+    important_references: ["baraff1996linear", "witkin1997physically"]
+    manual_related: ["macklin2016xpbd", "bouaziz2014projective"]
+    notes: "Important because it introduces position based dynamics as a robust constraint projection view."
+
+  macklin2016xpbd:
+    topic: ["XPBD", "compliance", "constraints"]
+    important_references: ["muller2007pbd"]
+    manual_related: ["muller2007pbd", "bouaziz2014projective"]
+    notes: "Key paper for compliance and iteration-independent constraint stiffness."
+
+  bouaziz2014projective:
+    topic: ["projective dynamics", "optimization", "constraints"]
+    manual_related: ["muller2007pbd", "macklin2016xpbd"]
+    notes: "Useful bridge between constraint projection language and energy minimization."
+
+  stomakhin2013mpm:
+    topic: ["MPM", "snow", "continuum mechanics"]
+    manual_related: ["jiang2016mpm"]
+
+  jiang2016mpm:
+    topic: ["MPM", "continuum mechanics", "numerical methods"]
+    manual_related: ["stomakhin2013mpm"]
+
+  kane2000variational:
+    topic: ["variational integrators", "time integration", "mechanics"]
+    manual_related: ["witkin1997physically"]

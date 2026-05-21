@@ -1,0 +1,9 @@
+﻿[theme]
+base = "light"
+primaryColor = "#0284c7"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8fbff"
+textColor = "#0f172a"
+linkColor = "#0369a1"
+borderColor = "#dbeafe"
+showWidgetBorder = true
