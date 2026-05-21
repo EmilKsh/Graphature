@@ -28,7 +28,7 @@ class Paper:
     tags: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
     file_path: str | None = None
-    read_status: bool = True
+    read_status: bool = False
     notes_path: str | None = None
     notes_content: str = ""
     important_references: list[str] = field(default_factory=list)

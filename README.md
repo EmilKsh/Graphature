@@ -112,9 +112,11 @@ Graphature supports three library sources:
 
 For Zotero SQLite import, point the app at `zotero.sqlite`. Graphature creates a temporary local snapshot and reads from that snapshot, so it does not write to Zotero.
 
+Important path rule: local paths are resolved on the machine running the Streamlit server, not in the browser. If Graphature is deployed on another machine, it cannot read `C:\...`, `/Users/...`, Zotero databases, Better BibTeX auto-export files, or PDFs that exist only on your computer. For deployed use, upload BibTeX/manual metadata files. For Zotero SQLite import, auto-export paths, and PDF attachment scanning, run Graphature locally.
+
 ## Add a Zotero Database
 
-Graphature can read Zotero directly without modifying Zotero's database.
+Graphature can read Zotero directly without modifying Zotero's database. This is intended for local runs, where the Streamlit server and Zotero data directory are on the same machine.
 
 Typical Zotero database locations:
 
@@ -135,6 +137,8 @@ To connect it:
 5. Click `Load / refresh Zotero library`.
 
 Graphature copies Zotero's SQLite files to a temporary snapshot and reads that copy. This avoids locking issues and keeps Zotero untouched. If your Zotero library changes, click `Load / refresh Zotero library` again.
+
+In a deployed app, a Zotero path from your computer will not work because the deployed server cannot see your filesystem. Use `streamlit run app.py` locally for direct Zotero access, or export/upload BibTeX instead.
 
 Zotero collections are imported with their hierarchy. If a paper is in `Simulation Intelligence / Fundamentals`, selecting `Simulation Intelligence` includes that paper, while coloring by collection can still distinguish the subcollection.
 

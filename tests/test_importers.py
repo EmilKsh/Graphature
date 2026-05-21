@@ -17,6 +17,7 @@ def test_parse_bibtex_sample_maps_core_fields():
     assert by_key["muller2007pbd"].year == 2007
     assert "PBD" in by_key["muller2007pbd"].tags
     assert "constraint solvers" in by_key["muller2007pbd"].collections
+    assert by_key["muller2007pbd"].read_status is False
 
 
 def test_manual_metadata_merges_by_citekey():
@@ -117,3 +118,4 @@ def test_parse_zotero_sqlite_reads_core_metadata(tmp_path):
     assert "simulation" in papers[0].tags
     assert papers[0].collections == ["Simulation Intelligence / Fundamentals"]
     assert papers[0].file_path.replace("\\", "/").endswith("storage/ATTACH01/paper.pdf")
+    assert papers[0].read_status is False

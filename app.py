@@ -36,7 +36,7 @@ from graphature.storage import (
     write_export,
 )
 from graphature.utils import ensure_list, normalize_key, unique_clean_strings
-from graphature.visualization import generate_pyvis_html, graph_to_vis_data
+from graphature.visualization import generate_pyvis_html, graph_color_legend, graph_to_vis_data
 
 
 ROOT = Path(__file__).resolve().parent
@@ -46,7 +46,7 @@ VIS_GRAPH = components.declare_component(
     "graphature_vis_graph_v2",
     path=str(ROOT / "graphature" / "components" / "vis_graph" / "frontend"),
 )
-GRAPH_VISUAL_VERSION = "source-and-scroll-v5"
+GRAPH_VISUAL_VERSION = "viewport-legend-v2"
 GRAPH_THEME = "light"
 
 
@@ -122,6 +122,8 @@ def main() -> None:
         selected_paper_ids=selected_ids,
         graph_theme=GRAPH_THEME,
     )
+    legend_rows = graph_color_legend(graph, color_mode=color_mode, graph_theme=GRAPH_THEME)
+    legend_title = "Collection legend" if color_mode == "collection" else "Color legend"
     graph_key = _graph_key(graph, color_mode, GRAPH_THEME)
 
     left, right = st.columns([0.76, 0.24], gap="small")
@@ -129,12 +131,15 @@ def main() -> None:
         graph_event = VIS_GRAPH(
             nodes=graph_data["nodes"],
             edges=graph_data["edges"],
+            legend=legend_rows,
+            legend_title=legend_title,
             selected_ids=selected_ids,
             graph_key=graph_key,
             theme=GRAPH_THEME,
-            height=760,
+            height=532,
             fill_viewport=True,
-            min_height=560,
+            viewport_scale=0.7,
+            min_height=392,
             bottom_margin=14,
             key=f"vis_graph_{source_fingerprint[:12]}",
             default={"selected_ids": selected_ids},
@@ -216,12 +221,14 @@ def _sidebar_imports() -> dict[str, Any]:
             "Better BibTeX auto-export path",
             value=str(config.get("bibtex_path", "")),
             placeholder=r"C:\Users\you\Zotero\exports\library.bib",
+            help="Local paths are read by the Streamlit server. In a deployed app, upload the BibTeX file instead.",
         )
     else:
         zotero_path = import_panel.text_input(
             "Zotero SQLite path",
             value=str(config.get("zotero_path") or _default_zotero_path()),
             placeholder=r"C:\Users\you\Zotero\zotero.sqlite",
+            help="Only works when Graphature runs on the same machine as Zotero. Deployed apps cannot read your browser machine's local paths.",
         )
         import_panel.caption("Zotero is read from a temporary local copy. Selecting this source does not load it yet.")
 
@@ -230,11 +237,12 @@ def _sidebar_imports() -> dict[str, Any]:
         "Manual metadata path",
         value=str(config.get("manual_path", "")),
         placeholder=r"C:\path\manual_metadata.yaml",
+        help="Local paths are read by the Streamlit server. In a deployed app, upload the metadata file instead.",
     )
     scan_pdfs = import_panel.checkbox(
         "Scan attached PDFs for references",
         value=bool(config.get("scan_pdfs", False)),
-        help="Uses local PDF files from Zotero/Better BibTeX file paths. Cached after the first scan.",
+        help="Uses PDFs reachable from the Streamlit server. Deployed apps cannot scan PDFs stored only on your computer.",
     )
 
     bib_text = ""
@@ -251,7 +259,7 @@ def _sidebar_imports() -> dict[str, Any]:
             bib_text = bib_file.read_text(encoding="utf-8", errors="replace")
             source_label = str(bib_file)
         else:
-            import_panel.warning("BibTeX path was not found.")
+            import_panel.warning(_server_path_missing_message("BibTeX", bib_file))
     elif use_sample and SAMPLE_BIB.exists():
         bib_text = SAMPLE_BIB.read_text(encoding="utf-8")
         source_label = "Sample data"
@@ -264,8 +272,7 @@ def _sidebar_imports() -> dict[str, Any]:
                 st.session_state.zotero_loaded_path = str(zotero_file)
                 _load_zotero_papers_cached.clear()
         else:
-            import_panel.warning("Zotero SQLite path was not found.")
-            zotero_path = ""
+            import_panel.warning(_server_path_missing_message("Zotero SQLite", zotero_file))
 
     if manual_upload is not None:
         manual_text = manual_upload.getvalue().decode("utf-8", errors="replace")
@@ -276,7 +283,7 @@ def _sidebar_imports() -> dict[str, Any]:
         if metadata_file.exists():
             manual_text = metadata_file.read_text(encoding="utf-8", errors="replace")
         else:
-            import_panel.warning("Manual metadata path was not found.")
+            import_panel.warning(_server_path_missing_message("Manual metadata", metadata_file))
     elif use_sample and SAMPLE_MANUAL.exists():
         manual_text = SAMPLE_MANUAL.read_text(encoding="utf-8")
 
@@ -286,7 +293,7 @@ def _sidebar_imports() -> dict[str, Any]:
         and st.session_state.get("zotero_loaded_path") == str(Path(zotero_path.strip()).expanduser())
     )
 
-    save_source_config(
+    _save_source_config_update(
         {
             "source_kind": source_kind,
             "bibtex_path": bib_path.strip(),
@@ -319,6 +326,20 @@ def _app_title() -> None:
 def _default_zotero_path() -> str:
     candidate = Path.home() / "Zotero" / "zotero.sqlite"
     return str(candidate) if candidate.exists() else ""
+
+
+def _save_source_config_update(updates: dict[str, Any]) -> None:
+    config = load_source_config()
+    config.update(updates)
+    save_source_config(config)
+
+
+def _server_path_missing_message(kind: str, path: Path) -> str:
+    return (
+        f"{kind} path was not found on the machine running Graphature: {path}. "
+        "If this is a deployed app, it cannot read local paths from your computer through the browser. "
+        "Upload the file instead, or run Graphature locally on the machine that has access to that path."
+    )
 
 
 def _file_signature(path_value: object) -> dict[str, object] | None:
@@ -366,8 +387,11 @@ def _should_scan_references(source: dict[str, Any], selected_mode: str) -> bool:
 def _sidebar_controls(
     facets: dict[str, list],
 ) -> tuple[GraphSettings, dict[str, object], str, str, Any, Any]:
+    config = load_source_config()
     graph_panel = st.sidebar.expander("Graph", expanded=True)
-    graph_mode = graph_panel.selectbox("Mode", list(GRAPH_MODE_PRESETS), index=0)
+    mode_options = list(GRAPH_MODE_PRESETS)
+    default_mode = "Citation graph"
+    graph_mode = graph_panel.selectbox("Mode", mode_options, index=mode_options.index(default_mode))
     default_edge_types = GRAPH_MODE_PRESETS[graph_mode]
     edge_types = graph_panel.multiselect(
         "Edge types",
@@ -377,7 +401,7 @@ def _sidebar_controls(
     )
     min_edge_weight = graph_panel.slider("Minimum edge weight", 0.0, 12.0, 0.0, 0.5)
     similarity_threshold = graph_panel.slider("Similarity threshold", 0.05, 0.95, 0.28, 0.01)
-    color_mode = graph_panel.selectbox("Color by", ["cluster", "tag", "year", "collection"], index=0)
+    color_mode = graph_panel.selectbox("Color by", ["cluster", "tag", "year", "collection"], index=3)
     export_panel = st.sidebar.container()
 
     graph_panel.markdown("**Search**")
@@ -386,7 +410,10 @@ def _sidebar_controls(
     graph_panel.markdown("**Filters**")
     tags = graph_panel.multiselect("Tags", facets["tags"])
     authors = graph_panel.multiselect("Authors", facets["authors"])
-    collections = graph_panel.multiselect("Collections", facets["collections"])
+    saved_collections = _valid_saved_options(ensure_list(config.get("selected_collections")), facets["collections"])
+    collections = graph_panel.multiselect("Collections", facets["collections"], default=saved_collections)
+    if collections != saved_collections:
+        _save_source_config_update({"selected_collections": collections})
     years = facets["years"]
     year_range: tuple[int, int] | None = None
     if len(years) > 1:
@@ -412,7 +439,8 @@ def _sidebar_controls(
 
 def _papers_list(graph, selected_mode: str, source_fingerprint: str) -> list[str]:
     st.markdown("**Papers**")
-    _graph_summary(graph, selected_mode)
+    with st.expander("Graph metrics", expanded=False):
+        _graph_summary(graph, selected_mode)
 
     rows = _paper_rows(graph)
     if not rows:
@@ -625,6 +653,16 @@ def _multiselect_options_and_defaults(options: list[str], current: list[str]) ->
     return choices, unique_clean_strings(resolved_defaults)
 
 
+def _valid_saved_options(saved: list[Any], options: list[str]) -> list[str]:
+    option_by_key = {normalize_key(option): option for option in options}
+    values = []
+    for value in unique_clean_strings(saved):
+        option = option_by_key.get(normalize_key(value))
+        if option:
+            values.append(option)
+    return values
+
+
 def _valid_selected_ids(graph) -> list[str]:
     return [node_id for node_id in st.session_state.selected_paper_ids if node_id in graph]
 
@@ -697,6 +735,8 @@ def _inject_css() -> None:
         """
         <style>
         :root,
+        html,
+        body,
         .stApp,
         [data-testid="stAppViewContainer"] {
             --primary-color: #0284c7 !important;
@@ -704,6 +744,7 @@ def _inject_css() -> None:
             --secondary-background-color: #f8fbff !important;
             --background-color: #ffffff !important;
             --text-color: #0f172a !important;
+            color-scheme: light !important;
         }
         .block-container {
             padding: 0.35rem 0.6rem 1rem;
@@ -722,7 +763,15 @@ def _inject_css() -> None:
             gap: 0.6rem;
         }
         .stApp {
-            background: #ffffff;
+            background: #ffffff !important;
+            color: #0f172a !important;
+            color-scheme: light !important;
+        }
+        [data-testid="stAppViewContainer"],
+        [data-testid="stHeader"],
+        [data-testid="stToolbar"] {
+            background: #ffffff !important;
+            color-scheme: light !important;
         }
         .stApp input,
         .stApp textarea,
@@ -834,6 +883,26 @@ def _inject_css() -> None:
             background-color: #0284c7 !important;
             border-color: #0369a1 !important;
             box-shadow: 0 0 0 3px #dbeafe !important;
+        }
+        [data-testid="stSlider"] [data-baseweb="slider"] *,
+        [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"],
+        [data-testid="stSlider"] [data-baseweb="slider"] [aria-valuenow],
+        [data-testid="stSlider"] [data-baseweb="slider"] [aria-valuetext] {
+            color: #075985 !important;
+            border-color: #0284c7 !important;
+        }
+        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="rgb(255, 75, 75)"],
+        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="#ff4b4b"],
+        [data-testid="stSlider"] [data-baseweb="slider"] span[style*="rgb(255, 75, 75)"],
+        [data-testid="stSlider"] [data-baseweb="slider"] span[style*="#ff4b4b"] {
+            color: #075985 !important;
+            background-color: #0284c7 !important;
+            border-color: #0284c7 !important;
+        }
+        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="background-color: rgb(255, 75, 75)"],
+        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="background: rgb(255, 75, 75)"] {
+            background-color: #0284c7 !important;
+            background: #0284c7 !important;
         }
         [data-baseweb="slider"] [role="slider"]:focus {
             box-shadow: 0 0 0 4px #bae6fd !important;

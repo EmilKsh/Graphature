@@ -102,6 +102,35 @@ def graph_to_vis_data(
     return {"nodes": nodes, "edges": edges}
 
 
+def graph_color_legend(
+    graph: nx.Graph,
+    color_mode: str = "cluster",
+    graph_theme: str = "light",
+) -> list[dict[str, object]]:
+    """Return legend rows using the same color mapping as graph nodes."""
+
+    values = _color_values(graph, color_mode)
+    if not values:
+        return []
+
+    unique_values = {value: index for index, value in enumerate(sorted(set(values.values()), key=str))}
+    palette = DARK_NODE_PALETTE if graph_theme == "dark" else PALETTE
+    counts: dict[object, int] = {}
+    for value in values.values():
+        counts[value] = counts.get(value, 0) + 1
+
+    rows = []
+    for value in sorted(unique_values, key=str):
+        rows.append(
+            {
+                "label": str(value),
+                "color": palette[unique_values[value] % len(palette)],
+                "count": counts[value],
+            }
+        )
+    return rows
+
+
 def generate_pyvis_html(
     graph: nx.Graph,
     color_mode: str = "cluster",
@@ -111,7 +140,7 @@ def generate_pyvis_html(
     """Generate an interactive PyVis HTML graph."""
 
     net = Network(height=height, width="100%", bgcolor="#ffffff", font_color="#1f2933", cdn_resources="in_line")
-    net.barnes_hut(gravity=-4200, central_gravity=0.22, spring_length=140, spring_strength=0.045, damping=0.12)
+    net.barnes_hut(gravity=-3600, central_gravity=0.34, spring_length=132, spring_strength=0.055, damping=0.22)
 
     color_lookup = _color_lookup(graph, color_mode)
 
@@ -161,8 +190,16 @@ def generate_pyvis_html(
                     "color": {"inherit": False},
                 },
                 "physics": {
-                    "stabilization": {"iterations": 220, "fit": True},
-                    "minVelocity": 0.75,
+                    "barnesHut": {
+                        "gravitationalConstant": -3600,
+                        "centralGravity": 0.34,
+                        "springLength": 132,
+                        "springConstant": 0.055,
+                        "damping": 0.22,
+                        "avoidOverlap": 0.12,
+                    },
+                    "stabilization": {"iterations": 260, "fit": True},
+                    "minVelocity": 0.25,
                 },
             }
         )
@@ -188,6 +225,13 @@ def _paper_tooltip(paper: object, data: dict[str, object]) -> str:
 
 
 def _color_lookup(graph: nx.Graph, color_mode: str, light_nodes: bool = False) -> dict[Hashable, str]:
+    values = _color_values(graph, color_mode)
+    unique_values = {value: index for index, value in enumerate(sorted(set(values.values()), key=str))}
+    palette = DARK_NODE_PALETTE if light_nodes else PALETTE
+    return {node_id: palette[unique_values[value] % len(palette)] for node_id, value in values.items()}
+
+
+def _color_values(graph: nx.Graph, color_mode: str) -> dict[Hashable, object]:
     values: dict[Hashable, object] = {}
     for node_id, data in graph.nodes(data=True):
         paper = data.get("paper")
@@ -201,7 +245,4 @@ def _color_lookup(graph: nx.Graph, color_mode: str, light_nodes: bool = False) -
         else:
             value = data.get("cluster", -1)
         values[node_id] = value
-
-    unique_values = {value: index for index, value in enumerate(sorted(set(values.values()), key=str))}
-    palette = DARK_NODE_PALETTE if light_nodes else PALETTE
-    return {node_id: palette[unique_values[value] % len(palette)] for node_id, value in values.items()}
+    return values

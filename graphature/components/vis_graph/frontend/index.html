@@ -30,6 +30,9 @@
         width: 100%;
         overflow: hidden;
         background: #ffffff;
+        border: 1px solid #dbe3ec;
+        border-radius: 8px;
+        box-sizing: border-box;
       }
 
       body.dark #graph {
@@ -49,12 +52,128 @@
         background: rgba(59, 130, 246, 0.16);
         z-index: 5;
       }
+
+      #graph-legend {
+        display: none;
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 6;
+        max-width: min(320px, calc(100% - 88px));
+        max-height: calc(100% - 24px);
+        overflow-y: auto;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid rgba(203, 213, 225, 0.92);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        backdrop-filter: blur(8px);
+        box-sizing: border-box;
+        color: #0f172a;
+      }
+
+      body.dark #graph-legend {
+        border-color: rgba(148, 163, 184, 0.38);
+        background: rgba(15, 23, 42, 0.82);
+        color: #f8fafc;
+      }
+
+      .legend-title {
+        padding: 0 2px 2px;
+        color: #075985;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      body.dark .legend-title {
+        color: #bae6fd;
+      }
+
+      .legend-item {
+        display: grid;
+        grid-template-columns: 10px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 7px;
+        min-height: 24px;
+        padding: 4px 7px;
+        border: 1px solid rgba(219, 234, 254, 0.95);
+        border-radius: 999px;
+        background: rgba(248, 251, 255, 0.92);
+        font-size: 12px;
+        line-height: 1.15;
+      }
+
+      body.dark .legend-item {
+        border-color: rgba(148, 163, 184, 0.24);
+        background: rgba(30, 41, 59, 0.88);
+      }
+
+      .legend-swatch {
+        width: 9px;
+        height: 9px;
+        border: 1px solid rgba(15, 23, 42, 0.14);
+        border-radius: 999px;
+      }
+
+      .legend-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .legend-count {
+        color: #075985;
+        font-weight: 800;
+      }
+
+      body.dark .legend-count {
+        color: #bae6fd;
+      }
+
+      #recenter-button {
+        position: absolute;
+        top: auto;
+        right: 10px;
+        bottom: 10px;
+        z-index: 6;
+        height: 30px;
+        min-width: 38px;
+        border: 1px solid #bfdbfe;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.88);
+        color: #075985;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0;
+        line-height: 1;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+        cursor: pointer;
+        backdrop-filter: blur(8px);
+      }
+
+      #recenter-button:hover {
+        background: #e0f2fe;
+        border-color: #7dd3fc;
+      }
+
+      #recenter-button:focus {
+        outline: 2px solid #bae6fd;
+        outline-offset: 2px;
+      }
     </style>
   </head>
   <body>
     <div id="graph">
       <div id="network"></div>
       <div id="selection-box"></div>
+      <div id="graph-legend" aria-label="Graph color legend"></div>
+      <button id="recenter-button" type="button" title="Fit graph to view" aria-label="Fit graph to view">
+        Fit
+      </button>
     </div>
     <script>
       const READY = "streamlit:componentReady";
@@ -64,6 +183,8 @@
       const container = document.getElementById("graph");
       const networkContainer = document.getElementById("network");
       const selectionBox = document.getElementById("selection-box");
+      const legendContainer = document.getElementById("graph-legend");
+      const recenterButton = document.getElementById("recenter-button");
 
       let network = null;
       let nodes = new vis.DataSet([]);
@@ -122,6 +243,7 @@
 
         const minHeight = numberArg(args.min_height, 560);
         const bottomMargin = numberArg(args.bottom_margin, 14);
+        const viewportScale = Math.max(0.2, Math.min(1, numberArg(args.viewport_scale, 1)));
         let parentHeight = fallback;
         let frameTop = 0;
 
@@ -132,7 +254,7 @@
           parentHeight = window.innerHeight || fallback;
         }
 
-        const available = Math.floor(parentHeight - frameTop - bottomMargin);
+        const available = Math.floor((parentHeight - frameTop - bottomMargin) * viewportScale);
         return Math.max(minHeight, available > 0 ? available : fallback);
       }
 
@@ -209,6 +331,54 @@
         network.moveTo({ scale: nextScale, animation: false });
       }
 
+      function fitGraph() {
+        if (!network) {
+          return;
+        }
+        network.fit({
+          animation: {
+            duration: 360,
+            easingFunction: "easeInOutQuad",
+          },
+        });
+      }
+
+      function renderLegend(rows, title) {
+        legendContainer.replaceChildren();
+        if (!Array.isArray(rows) || rows.length === 0) {
+          legendContainer.style.display = "none";
+          return;
+        }
+
+        const titleNode = document.createElement("div");
+        titleNode.className = "legend-title";
+        titleNode.textContent = title || "Legend";
+        legendContainer.appendChild(titleNode);
+
+        rows.forEach((row) => {
+          const item = document.createElement("div");
+          item.className = "legend-item";
+          item.title = String(row.label || "");
+
+          const swatch = document.createElement("span");
+          swatch.className = "legend-swatch";
+          swatch.style.background = String(row.color || "#94a3b8");
+
+          const label = document.createElement("span");
+          label.className = "legend-label";
+          label.textContent = String(row.label || "Unlabeled");
+
+          const count = document.createElement("span");
+          count.className = "legend-count";
+          count.textContent = String(row.count ?? "");
+
+          item.append(swatch, label, count);
+          legendContainer.appendChild(item);
+        });
+
+        legendContainer.style.display = "flex";
+      }
+
       function eventPoint(event) {
         const rect = networkContainer.getBoundingClientRect();
         return {
@@ -275,6 +445,7 @@
         const theme = args.theme || "light";
         document.body.classList.toggle("dark", theme === "dark");
         applyHeight(height);
+        renderLegend(args.legend || [], args.legend_title || "Legend");
 
         if (network && args.graph_key && args.graph_key === currentGraphKey) {
           syncSelection(args.selected_ids || [], false);
@@ -304,14 +475,15 @@
             enabled: true,
             solver: "barnesHut",
             barnesHut: {
-              gravitationalConstant: -4200,
-              centralGravity: 0.18,
-              springLength: 145,
-              springConstant: 0.045,
-              damping: 0.14,
+              gravitationalConstant: -3600,
+              centralGravity: 0.34,
+              springLength: 132,
+              springConstant: 0.055,
+              damping: 0.22,
+              avoidOverlap: 0.12,
             },
-            stabilization: { enabled: true, iterations: 180, fit: true },
-            minVelocity: 0.75,
+            stabilization: { enabled: true, iterations: 260, fit: true },
+            minVelocity: 0.25,
           },
           nodes: {
             shape: "dot",
@@ -384,6 +556,32 @@
           scrollParentPage(event.deltaX, event.deltaY);
         },
         { passive: false },
+      );
+
+      recenterButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        fitGraph();
+      });
+
+      recenterButton.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+      });
+
+      legendContainer.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+
+      legendContainer.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+      });
+
+      legendContainer.addEventListener(
+        "wheel",
+        (event) => {
+          event.stopPropagation();
+        },
+        { passive: true },
       );
 
       container.addEventListener(
