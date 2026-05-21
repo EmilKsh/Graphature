@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./lib/vis-network.css" />
+    <script src="./lib/vis-network.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #ffffff;
+        font-family: Inter, "Segoe UI", Arial, sans-serif;
+      }
+
+      body.dark {
+        background: #0f172a;
+        color-scheme: dark;
+      }
+
+      #graph {
+        position: relative;
+        height: 760px;
+        width: 100%;
+        overflow: hidden;
+        background: #ffffff;
+      }
+
+      body.dark #graph {
+        background: #0f172a;
+      }
+
+      #network {
+        height: 100%;
+        width: 100%;
+      }
+
+      #selection-box {
+        display: none;
+        position: absolute;
+        pointer-events: none;
+        border: 1px solid rgba(59, 130, 246, 0.95);
+        background: rgba(59, 130, 246, 0.16);
+        z-index: 5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="graph">
+      <div id="network"></div>
+      <div id="selection-box"></div>
+    </div>
+    <script>
+      const READY = "streamlit:componentReady";
+      const RENDER = "streamlit:render";
+      const SET_VALUE = "streamlit:setComponentValue";
+      const SET_HEIGHT = "streamlit:setFrameHeight";
+      const container = document.getElementById("graph");
+      const networkContainer = document.getElementById("network");
+      const selectionBox = document.getElementById("selection-box");
+
+      let network = null;
+      let nodes = new vis.DataSet([]);
+      let edges = new vis.DataSet([]);
+      let selectedIds = [];
+      let shiftSelecting = false;
+      let dragStart = null;
+      let currentGraphKey = null;
+      let lastRenderArgs = null;
+      let resizeFrame = null;
+
+      function sendMessage(type, payload) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function setFrameHeight(height) {
+        sendMessage(SET_HEIGHT, { height });
+      }
+
+      function setValue(value) {
+        sendMessage(SET_VALUE, { value });
+      }
+
+      function componentReady() {
+        sendMessage(READY, { apiVersion: 1 });
+      }
+
+      function normalizeSelected(ids) {
+        return Array.from(new Set((ids || []).map(String)));
+      }
+
+      function updateValue() {
+        setValue({ selected_ids: selectedIds, event_id: Date.now() });
+      }
+
+      function syncSelection(ids, publish = true) {
+        selectedIds = normalizeSelected(ids);
+        if (network) {
+          network.selectNodes(selectedIds, false);
+        }
+        if (publish) {
+          updateValue();
+        }
+      }
+
+      function numberArg(value, fallback) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      }
+
+      function viewportHeight(args) {
+        const fallback = numberArg(args.height, 760);
+        if (!args.fill_viewport) {
+          return fallback;
+        }
+
+        const minHeight = numberArg(args.min_height, 560);
+        const bottomMargin = numberArg(args.bottom_margin, 14);
+        let parentHeight = fallback;
+        let frameTop = 0;
+
+        try {
+          parentHeight = window.parent.innerHeight || fallback;
+          frameTop = window.frameElement ? window.frameElement.getBoundingClientRect().top : 0;
+        } catch {
+          parentHeight = window.innerHeight || fallback;
+        }
+
+        const available = Math.floor(parentHeight - frameTop - bottomMargin);
+        return Math.max(minHeight, available > 0 ? available : fallback);
+      }
+
+      function applyHeight(height) {
+        container.style.height = `${height}px`;
+        networkContainer.style.height = `${height}px`;
+        setFrameHeight(height);
+        if (network) {
+          network.redraw();
+        }
+      }
+
+      function scheduleViewportResize() {
+        if (!lastRenderArgs || !lastRenderArgs.fill_viewport) {
+          return;
+        }
+        if (resizeFrame) {
+          window.cancelAnimationFrame(resizeFrame);
+        }
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null;
+          applyHeight(viewportHeight(lastRenderArgs));
+        });
+      }
+
+      function scheduleNetworkResize() {
+        if (resizeFrame) {
+          window.cancelAnimationFrame(resizeFrame);
+        }
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null;
+          if (lastRenderArgs && lastRenderArgs.fill_viewport) {
+            applyHeight(viewportHeight(lastRenderArgs));
+          }
+          if (network) {
+            network.setSize("100%", `${container.clientHeight}px`);
+            network.redraw();
+          }
+        });
+      }
+
+      function scrollParentPage(deltaX, deltaY) {
+        try {
+          const parentDocument = window.parent.document;
+          const candidates = [
+            parentDocument.querySelector('[data-testid="stAppViewContainer"]'),
+            parentDocument.querySelector('[data-testid="stMain"]'),
+            parentDocument.querySelector('section.main'),
+            parentDocument.scrollingElement,
+            parentDocument.documentElement,
+          ].filter(Boolean);
+          const target =
+            candidates.find((element) => element.scrollHeight > element.clientHeight + 4) ||
+            parentDocument.scrollingElement ||
+            parentDocument.documentElement;
+          if (typeof target.scrollBy === "function") {
+            target.scrollBy({ left: deltaX, top: deltaY, behavior: "auto" });
+          } else {
+            target.scrollLeft += deltaX;
+            target.scrollTop += deltaY;
+          }
+        } catch {
+          window.parent.postMessage({ type: "graphature:scrollPage", deltaX, deltaY }, "*");
+        }
+      }
+
+      function zoomGraph(event) {
+        if (!network) {
+          return;
+        }
+        const currentScale = network.getScale();
+        const factor = Math.exp(-event.deltaY * 0.0015);
+        const nextScale = Math.max(0.08, Math.min(6, currentScale * factor));
+        network.moveTo({ scale: nextScale, animation: false });
+      }
+
+      function eventPoint(event) {
+        const rect = networkContainer.getBoundingClientRect();
+        return {
+          dom: { x: event.clientX - rect.left, y: event.clientY - rect.top },
+          page: { x: event.clientX, y: event.clientY },
+        };
+      }
+
+      function setBox(start, current) {
+        const left = Math.min(start.dom.x, current.dom.x);
+        const top = Math.min(start.dom.y, current.dom.y);
+        const width = Math.abs(start.dom.x - current.dom.x);
+        const height = Math.abs(start.dom.y - current.dom.y);
+        selectionBox.style.display = "block";
+        selectionBox.style.left = `${left}px`;
+        selectionBox.style.top = `${top}px`;
+        selectionBox.style.width = `${width}px`;
+        selectionBox.style.height = `${height}px`;
+      }
+
+      function finishBoxSelection(event) {
+        if (!shiftSelecting || !network || !dragStart) {
+          return;
+        }
+        const dragEnd = eventPoint(event);
+        const startCanvas = network.DOMtoCanvas(dragStart.dom);
+        const endCanvas = network.DOMtoCanvas(dragEnd.dom);
+        const minX = Math.min(startCanvas.x, endCanvas.x);
+        const maxX = Math.max(startCanvas.x, endCanvas.x);
+        const minY = Math.min(startCanvas.y, endCanvas.y);
+        const maxY = Math.max(startCanvas.y, endCanvas.y);
+        const dx = Math.abs(dragEnd.dom.x - dragStart.dom.x);
+        const dy = Math.abs(dragEnd.dom.y - dragStart.dom.y);
+        const next = new Set(selectedIds);
+
+        if (dx < 6 && dy < 6) {
+          const clickedNode = network.getNodeAt(dragEnd.dom);
+          if (clickedNode) {
+            const id = String(clickedNode);
+            if (next.has(id)) {
+              next.delete(id);
+            } else {
+              next.add(id);
+            }
+          }
+        } else {
+          const positions = network.getPositions();
+          Object.entries(positions).forEach(([id, pos]) => {
+            if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
+              next.add(String(id));
+            }
+          });
+        }
+
+        selectionBox.style.display = "none";
+        shiftSelecting = false;
+        dragStart = null;
+        syncSelection(Array.from(next));
+      }
+
+      function render(args) {
+        lastRenderArgs = args;
+        const height = viewportHeight(args);
+        const theme = args.theme || "light";
+        document.body.classList.toggle("dark", theme === "dark");
+        applyHeight(height);
+
+        if (network && args.graph_key && args.graph_key === currentGraphKey) {
+          syncSelection(args.selected_ids || [], false);
+          return;
+        }
+
+        currentGraphKey = args.graph_key || null;
+        nodes = new vis.DataSet(args.nodes || []);
+        edges = new vis.DataSet(args.edges || []);
+        selectedIds = normalizeSelected(args.selected_ids || []);
+
+        const options = {
+          autoResize: true,
+          interaction: {
+            dragNodes: true,
+            dragView: true,
+            hover: true,
+            keyboard: false,
+            multiselect: true,
+            navigationButtons: false,
+            selectable: true,
+            selectConnectedEdges: false,
+            tooltipDelay: 120,
+            zoomView: false,
+          },
+          physics: {
+            enabled: true,
+            solver: "barnesHut",
+            barnesHut: {
+              gravitationalConstant: -4200,
+              centralGravity: 0.18,
+              springLength: 145,
+              springConstant: 0.045,
+              damping: 0.14,
+            },
+            stabilization: { enabled: true, iterations: 180, fit: true },
+            minVelocity: 0.75,
+          },
+          nodes: {
+            shape: "dot",
+            font: {
+              size: 15,
+              face: "Inter, Segoe UI, Arial",
+              color: theme === "dark" ? "#f8fafc" : "#1f2933",
+              strokeWidth: theme === "dark" ? 3 : 2,
+              strokeColor: theme === "dark" ? "#0f172a" : "#ffffff",
+            },
+            borderWidth: 1.4,
+            borderWidthSelected: 4,
+            shadow: false,
+          },
+          edges: {
+            color: theme === "dark" ? "rgba(239, 246, 255, 0.30)" : "rgba(96, 165, 250, 0.34)",
+            smooth: { type: "dynamic" },
+            selectionWidth: 1,
+          },
+        };
+
+        if (network) {
+          network.destroy();
+        }
+        network = new vis.Network(networkContainer, { nodes, edges }, options);
+        window.paperGraphNetwork = network;
+        window.paperGraphNodes = nodes;
+        window.paperGraphEdges = edges;
+        window.paperGraphSyncSelection = syncSelection;
+        syncSelection(selectedIds, false);
+
+        network.on("click", (params) => {
+          const sourceEvent = params.event && params.event.srcEvent;
+          if (sourceEvent && sourceEvent.shiftKey) {
+            return;
+          }
+
+          if (params.nodes && params.nodes.length > 0) {
+            const clickedId = String(params.nodes[0]);
+            if (selectedIds.length === 1 && selectedIds[0] === clickedId) {
+              syncSelection([]);
+            } else {
+              syncSelection([clickedId]);
+            }
+          } else {
+            syncSelection([]);
+          }
+        });
+
+        applyHeight(height);
+      }
+
+      window.addEventListener("resize", scheduleNetworkResize);
+      if (window.ResizeObserver) {
+        const graphResizeObserver = new ResizeObserver(scheduleNetworkResize);
+        graphResizeObserver.observe(document.documentElement);
+        graphResizeObserver.observe(container);
+      }
+
+      container.addEventListener(
+        "wheel",
+        (event) => {
+          if (event.ctrlKey) {
+            event.preventDefault();
+            zoomGraph(event);
+            return;
+          }
+
+          event.preventDefault();
+          scrollParentPage(event.deltaX, event.deltaY);
+        },
+        { passive: false },
+      );
+
+      container.addEventListener(
+        "mousedown",
+        (event) => {
+          if (!event.shiftKey || event.button !== 0 || !network) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          shiftSelecting = true;
+          dragStart = eventPoint(event);
+          setBox(dragStart, dragStart);
+        },
+        true,
+      );
+
+      window.addEventListener(
+        "mousemove",
+        (event) => {
+          if (!shiftSelecting || !dragStart) {
+            return;
+          }
+          event.preventDefault();
+          setBox(dragStart, eventPoint(event));
+        },
+        true,
+      );
+
+      window.addEventListener(
+        "mouseup",
+        (event) => {
+          if (!shiftSelecting) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          finishBoxSelection(event);
+        },
+        true,
+      );
+
+      window.addEventListener("message", (event) => {
+        if (event.data.type === RENDER) {
+          render(event.data.args || {});
+        }
+      });
+
+      componentReady();
+    </script>
+  </body>
+</html>
