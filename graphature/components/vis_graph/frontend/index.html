@@ -20,7 +20,7 @@
       }
 
       body.dark {
-        background: #0f172a;
+        background: #0b1120;
         color-scheme: dark;
       }
 
@@ -36,7 +36,8 @@
       }
 
       body.dark #graph {
-        background: #0f172a;
+        background: #0b1120;
+        border-color: #334155;
       }
 
       #network {
@@ -158,6 +159,19 @@
       #recenter-button:hover {
         background: #e0f2fe;
         border-color: #7dd3fc;
+      }
+
+      body.dark #recenter-button {
+        border-color: rgba(125, 211, 252, 0.52);
+        background: rgba(15, 23, 42, 0.86);
+        color: #bae6fd;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.26);
+      }
+
+      body.dark #recenter-button:hover {
+        background: rgba(22, 78, 99, 0.92);
+        border-color: #38bdf8;
+        color: #e0f2fe;
       }
 
       #recenter-button:focus {
@@ -499,7 +513,10 @@
             shadow: false,
           },
           edges: {
-            color: theme === "dark" ? "rgba(239, 246, 255, 0.30)" : "rgba(96, 165, 250, 0.34)",
+            color:
+              theme === "dark"
+                ? { color: "rgba(226, 232, 240, 0.56)", highlight: "#e0f2fe", hover: "#bae6fd" }
+                : { color: "rgba(96, 165, 250, 0.34)", highlight: "#0284c7", hover: "#0ea5e9" },
             smooth: { type: "dynamic" },
             selectionWidth: 1,
           },

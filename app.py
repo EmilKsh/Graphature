@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image
 
 from graphature.clustering import assign_communities, cluster_summary
 from graphature.graph_builder import (
@@ -40,14 +42,22 @@ from graphature.visualization import generate_pyvis_html, graph_color_legend, gr
 
 
 ROOT = Path(__file__).resolve().parent
+ASSETS_DIR = ROOT / "graphature" / "assets"
+LOGO_ICON = ASSETS_DIR / "graphature_icon.png"
+LOGO_APP_ICON = ASSETS_DIR / "graphature_app_icon.png"
 SAMPLE_BIB = ROOT / "examples" / "sample_library.bib"
 SAMPLE_MANUAL = ROOT / "examples" / "sample_manual_metadata.yaml"
 VIS_GRAPH = components.declare_component(
     "graphature_vis_graph_v2",
     path=str(ROOT / "graphature" / "components" / "vis_graph" / "frontend"),
 )
-GRAPH_VISUAL_VERSION = "viewport-legend-v2"
-GRAPH_THEME = "light"
+GRAPH_VISUAL_VERSION = "theme-sync-v1"
+DEFAULT_GRAPH_THEME = "light"
+THEME_OPTIONS = {
+    "Light": "light",
+    "Dark": "dark",
+    "System": "system",
+}
 
 
 EDGE_LABELS = {
@@ -61,11 +71,17 @@ EDGE_LABELS = {
 
 
 def main() -> None:
-    st.set_page_config(page_title="Graphature", layout="wide")
+    page_icon = _page_icon()
+    if page_icon is None:
+        st.set_page_config(page_title="Graphature", layout="wide")
+    else:
+        st.set_page_config(page_title="Graphature", page_icon=page_icon, layout="wide")
     ensure_project_dirs()
     _init_state()
-    _inject_css()
+    graph_theme = _active_theme()
+    _inject_css(graph_theme)
     _app_title()
+    _sidebar_theme_control()
 
     source = _sidebar_imports()
     if source["source_kind"] == "zotero_pending":
@@ -120,11 +136,11 @@ def main() -> None:
         graph,
         color_mode=color_mode,
         selected_paper_ids=selected_ids,
-        graph_theme=GRAPH_THEME,
+        graph_theme=graph_theme,
     )
-    legend_rows = graph_color_legend(graph, color_mode=color_mode, graph_theme=GRAPH_THEME)
+    legend_rows = graph_color_legend(graph, color_mode=color_mode, graph_theme=graph_theme)
     legend_title = "Collection legend" if color_mode == "collection" else "Color legend"
-    graph_key = _graph_key(graph, color_mode, GRAPH_THEME)
+    graph_key = _graph_key(graph, color_mode, graph_theme)
 
     left, right = st.columns([0.76, 0.24], gap="small")
     with left:
@@ -135,7 +151,7 @@ def main() -> None:
             legend_title=legend_title,
             selected_ids=selected_ids,
             graph_key=graph_key,
-            theme=GRAPH_THEME,
+            theme=graph_theme,
             height=532,
             fill_viewport=True,
             viewport_scale=0.7,
@@ -174,6 +190,33 @@ def _init_state() -> None:
         st.session_state.source_fingerprint = ""
     if "zotero_loaded_path" not in st.session_state:
         st.session_state.zotero_loaded_path = ""
+
+
+def _page_icon():
+    if not LOGO_APP_ICON.exists():
+        return None
+    with Image.open(LOGO_APP_ICON) as image:
+        return image.copy()
+
+
+def _active_theme() -> str:
+    """Return the active app theme type, defaulting to light."""
+
+    preference = normalize_key(load_source_config().get("theme_preference") or DEFAULT_GRAPH_THEME)
+    if preference in {"light", "dark"}:
+        return preference
+
+    theme_type = ""
+    try:
+        theme_type = str(st.context.theme.get("type") or "")
+    except Exception:  # noqa: BLE001
+        theme_type = ""
+
+    if normalize_key(theme_type) in {"light", "dark"}:
+        return normalize_key(theme_type)
+
+    configured = normalize_key(st.get_option("theme.base") or DEFAULT_GRAPH_THEME)
+    return configured if configured in {"light", "dark"} else DEFAULT_GRAPH_THEME
 
 
 def _source_fingerprint(source: dict[str, Any]) -> str:
@@ -314,13 +357,50 @@ def _sidebar_imports() -> dict[str, Any]:
 
 
 def _app_title() -> None:
+    logo = _image_data_uri(LOGO_ICON)
+    logo_markup = (
+        f'<span class="app-brand-logo-wrap"><img class="app-brand-logo" src="{logo}" alt="Graphature logo"></span>'
+        if logo
+        else ""
+    )
     st.sidebar.markdown(
-        """
-        <div class="app-brand">Graphature</div>
-        <div class="app-brand-subtitle">Local literature graph</div>
+        f"""
+        <div class="app-brand-row">
+            {logo_markup}
+            <div class="app-brand-copy">
+                <div class="app-brand">Graphature</div>
+                <div class="app-brand-subtitle">Local literature graph</div>
+            </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _image_data_uri(path: Path) -> str:
+    if not path.exists():
+        return ""
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _sidebar_theme_control() -> None:
+    config = load_source_config()
+    current = normalize_key(config.get("theme_preference") or DEFAULT_GRAPH_THEME)
+    if current not in set(THEME_OPTIONS.values()):
+        current = DEFAULT_GRAPH_THEME
+
+    label_by_value = {value: label for label, value in THEME_OPTIONS.items()}
+    selected_label = st.sidebar.selectbox(
+        "Theme",
+        list(THEME_OPTIONS),
+        index=list(THEME_OPTIONS).index(label_by_value[current]),
+        help="Graphature's own theme switcher. System follows Streamlit/browser theme when available.",
+    )
+    selected = THEME_OPTIONS[selected_label]
+    if selected != current:
+        _save_source_config_update({"theme_preference": selected})
+        st.rerun()
 
 
 def _default_zotero_path() -> str:
@@ -730,99 +810,159 @@ def _node_ids_from_table_event(event, id_order: list[str]) -> list[str]:
     return node_ids
 
 
-def _inject_css() -> None:
+def _inject_css(theme: str) -> None:
+    dark = theme == "dark"
+    colors = {
+        "bg": "#0b1120" if dark else "#ffffff",
+        "surface": "#111827" if dark else "#f8fbff",
+        "panel": "#0f172a" if dark else "#ffffff",
+        "field": "#111827" if dark else "#ffffff",
+        "text": "#e5e7eb" if dark else "#0f172a",
+        "muted": "#94a3b8" if dark else "#0f766e",
+        "brand": "#7dd3fc" if dark else "#075985",
+        "border": "#334155" if dark else "#dbeafe",
+        "border_strong": "#38bdf8" if dark else "#7dd3fc",
+        "accent": "#38bdf8" if dark else "#0284c7",
+        "accent_strong": "#7dd3fc" if dark else "#075985",
+        "accent_soft": "#102a43" if dark else "#e0f2fe",
+        "accent_focus": "#164e63" if dark else "#dbeafe",
+        "button_hover": "#164e63" if dark else "#bae6fd",
+    }
+    color_scheme = "dark" if dark else "light"
+    primary_rgb = "56, 189, 248" if dark else "2, 132, 199"
+
     st.markdown(
-        """
+        f"""
         <style>
         :root,
         html,
         body,
         .stApp,
-        [data-testid="stAppViewContainer"] {
-            --primary-color: #0284c7 !important;
-            --primary-color-rgb: 2, 132, 199 !important;
-            --secondary-background-color: #f8fbff !important;
-            --background-color: #ffffff !important;
-            --text-color: #0f172a !important;
-            color-scheme: light !important;
-        }
-        .block-container {
+        [data-testid="stAppViewContainer"] {{
+            --primary-color: {colors["accent"]} !important;
+            --primary-color-rgb: {primary_rgb} !important;
+            --graphature-bg: {colors["bg"]};
+            --graphature-surface: {colors["surface"]};
+            --graphature-panel: {colors["panel"]};
+            --graphature-field: {colors["field"]};
+            --graphature-text: {colors["text"]};
+            --graphature-muted: {colors["muted"]};
+            --graphature-brand: {colors["brand"]};
+            --graphature-border: {colors["border"]};
+            --graphature-border-strong: {colors["border_strong"]};
+            --graphature-accent: {colors["accent"]};
+            --graphature-accent-strong: {colors["accent_strong"]};
+            --graphature-accent-soft: {colors["accent_soft"]};
+            --graphature-accent-focus: {colors["accent_focus"]};
+            --graphature-button-hover: {colors["button_hover"]};
+            color-scheme: {color_scheme};
+        }}
+        .block-container {{
             padding: 0.35rem 0.6rem 1rem;
             max-width: none;
             width: 100%;
-        }
-        [data-testid="stAppViewContainer"] > .main {
+        }}
+        [data-testid="stAppViewContainer"] > .main {{
             width: 100%;
-        }
-        [data-testid="stMainBlockContainer"] {
+        }}
+        [data-testid="stMainBlockContainer"] {{
             max-width: none;
             padding-left: 0.6rem;
             padding-right: 0.6rem;
-        }
-        [data-testid="stHorizontalBlock"] {
+        }}
+        [data-testid="stHorizontalBlock"] {{
             gap: 0.6rem;
-        }
-        .stApp {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            color-scheme: light !important;
-        }
+        }}
+        .stApp,
         [data-testid="stAppViewContainer"],
         [data-testid="stHeader"],
-        [data-testid="stToolbar"] {
-            background: #ffffff !important;
-            color-scheme: light !important;
-        }
+        [data-testid="stToolbar"] {{
+            background: var(--graphature-bg) !important;
+            color: var(--graphature-text) !important;
+            color-scheme: {color_scheme};
+        }}
+        [data-testid="stHeader"],
+        [data-testid="stToolbar"] {{
+            border-color: var(--graphature-border) !important;
+        }}
         .stApp input,
         .stApp textarea,
-        .stApp select {
-            accent-color: #0284c7 !important;
-        }
-        [data-testid="stSidebar"] {
-            background: #f8fbff;
-            border-right: 1px solid #dbeafe;
-        }
-        [data-testid="stSidebar"][aria-expanded="true"] {
+        .stApp select {{
+            accent-color: var(--graphature-accent) !important;
+        }}
+        [data-testid="stSidebar"] {{
+            background: var(--graphature-surface) !important;
+            border-right: 1px solid var(--graphature-border);
+            color: var(--graphature-text) !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="true"] {{
             min-width: 21.5rem !important;
             width: 21.5rem !important;
             max-width: 21.5rem !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="false"] {
+        }}
+        [data-testid="stSidebar"][aria-expanded="false"] {{
             min-width: 0 !important;
             width: 0 !important;
             max-width: 0 !important;
             border-right: 0;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        }}
+        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
             gap: 0.45rem;
-        }
-        [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+        }}
+        [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
             padding: 0.75rem 0.75rem 1rem;
-        }
-        .app-brand {
-            margin: 0 0 0.05rem;
-            color: #075985;
+        }}
+        .app-brand-row {{
+            display: grid;
+            grid-template-columns: 3.1rem minmax(0, 1fr);
+            align-items: center;
+            gap: 0.7rem;
+            margin: 0 0 0.85rem;
+        }}
+        .app-brand-logo-wrap {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 3.1rem;
+            height: 3.1rem;
+            border: 1px solid var(--graphature-border);
+            border-radius: 10px;
+            background: #ffffff;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+        }}
+        .app-brand-logo {{
+            display: block;
+            width: 2.35rem;
+            height: 2.35rem;
+            object-fit: contain;
+        }}
+        .app-brand-copy {{
+            min-width: 0;
+        }}
+        .app-brand {{
+            margin: 0 0 0.08rem;
+            color: var(--graphature-brand);
             font-size: 1.85rem;
             font-weight: 760;
             letter-spacing: 0;
             line-height: 1.05;
-        }
-        .app-brand-subtitle {
-            margin: 0 0 1.2rem;
-            color: #0f766e;
+        }}
+        .app-brand-subtitle {{
+            margin: 0;
+            color: var(--graphature-muted);
             font-size: 0.82rem;
             font-weight: 600;
             letter-spacing: 0.01em;
-        }
-        [data-testid="stCustomComponentV1"] {
+        }}
+        [data-testid="stCustomComponentV1"] {{
             display: block;
-            background: #ffffff;
-        }
-        iframe[title="app.graphature_vis_graph_v2"] {
+            background: var(--graphature-bg);
+        }}
+        iframe[title="app.graphature_vis_graph_v2"] {{
             display: block;
             width: 100% !important;
-        }
-        [data-testid="stColumn"]:has(.detail-panel-anchor) {
+        }}
+        [data-testid="stColumn"]:has(.detail-panel-anchor) {{
             position: sticky;
             top: 0.35rem;
             align-self: flex-start;
@@ -830,112 +970,126 @@ def _inject_css() -> None:
             overflow-y: auto;
             overscroll-behavior: contain;
             padding-right: 0.2rem;
-        }
-        [data-testid="stDataFrame"] {
+        }}
+        [data-testid="stDataFrame"] {{
             width: 100%;
-        }
+            color-scheme: {color_scheme};
+        }}
         [data-testid="stExpander"],
-        [data-testid="stVerticalBlockBorderWrapper"] {
+        [data-testid="stVerticalBlockBorderWrapper"] {{
             width: 100%;
-        }
-        [data-baseweb="tag"] {
-            background-color: #e0f2fe !important;
-            border: 1px solid #bae6fd !important;
-            color: #075985 !important;
-        }
-        [data-baseweb="tag"] span {
-            color: #075985 !important;
-        }
-        [data-baseweb="tag"] svg {
-            color: #0284c7 !important;
-        }
+        }}
+        [data-testid="stExpander"] details {{
+            background: var(--graphature-panel) !important;
+            border-color: var(--graphature-border) !important;
+            color: var(--graphature-text) !important;
+        }}
+        [data-baseweb="tag"] {{
+            background-color: var(--graphature-accent-soft) !important;
+            border: 1px solid var(--graphature-border-strong) !important;
+            color: var(--graphature-accent-strong) !important;
+        }}
+        [data-baseweb="tag"] span {{
+            color: var(--graphature-accent-strong) !important;
+        }}
+        [data-baseweb="tag"] svg {{
+            color: var(--graphature-accent) !important;
+        }}
+        [data-baseweb="menu"] {{
+            background: var(--graphature-panel) !important;
+            color: var(--graphature-text) !important;
+        }}
         [data-baseweb="menu"] [aria-selected="true"],
-        [role="option"][aria-selected="true"] {
-            background-color: #e0f2fe !important;
-            color: #075985 !important;
-        }
+        [role="option"][aria-selected="true"] {{
+            background-color: var(--graphature-accent-soft) !important;
+            color: var(--graphature-accent-strong) !important;
+        }}
         [data-baseweb="menu"] [aria-selected="true"] svg,
-        [role="option"][aria-selected="true"] svg {
-            color: #0284c7 !important;
-            fill: #0284c7 !important;
-        }
-        [data-baseweb="checkbox"]:has(input:checked) > span:first-child {
-            background-color: #0284c7 !important;
-            border-color: #0284c7 !important;
-        }
+        [role="option"][aria-selected="true"] svg {{
+            color: var(--graphature-accent) !important;
+            fill: var(--graphature-accent) !important;
+        }}
+        [data-baseweb="checkbox"]:has(input:checked) > span:first-child {{
+            background-color: var(--graphature-accent) !important;
+            border-color: var(--graphature-accent) !important;
+        }}
         [data-testid="stCheckbox"] input,
-        [data-baseweb="checkbox"] input {
-            accent-color: #0284c7 !important;
-        }
+        [data-baseweb="checkbox"] input {{
+            accent-color: var(--graphature-accent) !important;
+        }}
         [data-testid="stCheckbox"] label:has(input:checked) > span:first-child,
         [data-baseweb="checkbox"] input:checked ~ span,
-        [data-baseweb="checkbox"] span:has(+ input:checked) {
-            background-color: #0284c7 !important;
-            border-color: #0284c7 !important;
-        }
-        [data-baseweb="checkbox"]:has(input:focus) > span:first-child {
-            box-shadow: 0 0 0 3px #bae6fd !important;
-        }
-        [data-baseweb="checkbox"] > span:first-child {
-            border-color: #93c5fd !important;
-        }
-        [data-baseweb="slider"] [role="slider"] {
-            background-color: #0284c7 !important;
-            border-color: #0369a1 !important;
-            box-shadow: 0 0 0 3px #dbeafe !important;
-        }
+        [data-baseweb="checkbox"] span:has(+ input:checked) {{
+            background-color: var(--graphature-accent) !important;
+            border-color: var(--graphature-accent) !important;
+        }}
+        [data-baseweb="checkbox"]:has(input:focus) > span:first-child {{
+            box-shadow: 0 0 0 3px var(--graphature-accent-focus) !important;
+        }}
+        [data-baseweb="checkbox"] > span:first-child {{
+            border-color: var(--graphature-border-strong) !important;
+        }}
+        [data-baseweb="slider"] [role="slider"] {{
+            background-color: var(--graphature-accent) !important;
+            border-color: var(--graphature-accent-strong) !important;
+            box-shadow: 0 0 0 3px var(--graphature-accent-focus) !important;
+        }}
         [data-testid="stSlider"] [data-baseweb="slider"] *,
         [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"],
         [data-testid="stSlider"] [data-baseweb="slider"] [aria-valuenow],
-        [data-testid="stSlider"] [data-baseweb="slider"] [aria-valuetext] {
-            color: #075985 !important;
-            border-color: #0284c7 !important;
-        }
+        [data-testid="stSlider"] [data-baseweb="slider"] [aria-valuetext] {{
+            color: var(--graphature-accent-strong) !important;
+            border-color: var(--graphature-accent) !important;
+        }}
         [data-testid="stSlider"] [data-baseweb="slider"] div[style*="rgb(255, 75, 75)"],
         [data-testid="stSlider"] [data-baseweb="slider"] div[style*="#ff4b4b"],
         [data-testid="stSlider"] [data-baseweb="slider"] span[style*="rgb(255, 75, 75)"],
-        [data-testid="stSlider"] [data-baseweb="slider"] span[style*="#ff4b4b"] {
-            color: #075985 !important;
-            background-color: #0284c7 !important;
-            border-color: #0284c7 !important;
-        }
+        [data-testid="stSlider"] [data-baseweb="slider"] span[style*="#ff4b4b"] {{
+            color: var(--graphature-accent-strong) !important;
+            background-color: var(--graphature-accent) !important;
+            border-color: var(--graphature-accent) !important;
+        }}
         [data-testid="stSlider"] [data-baseweb="slider"] div[style*="background-color: rgb(255, 75, 75)"],
-        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="background: rgb(255, 75, 75)"] {
-            background-color: #0284c7 !important;
-            background: #0284c7 !important;
-        }
-        [data-baseweb="slider"] [role="slider"]:focus {
-            box-shadow: 0 0 0 4px #bae6fd !important;
-        }
-        [data-baseweb="slider"] div[style*="height: 0.25rem"] {
-            background: #bae6fd !important;
-        }
+        [data-testid="stSlider"] [data-baseweb="slider"] div[style*="background: rgb(255, 75, 75)"] {{
+            background-color: var(--graphature-accent) !important;
+            background: var(--graphature-accent) !important;
+        }}
+        [data-baseweb="slider"] [role="slider"]:focus {{
+            box-shadow: 0 0 0 4px var(--graphature-accent-focus) !important;
+        }}
+        [data-baseweb="slider"] div[style*="height: 0.25rem"] {{
+            background: var(--graphature-border-strong) !important;
+        }}
         [data-baseweb="select"] > div,
         [data-testid="stTextInput"] input,
-        [data-testid="stFileUploader"] section {
-            border-color: #bfdbfe !important;
-        }
+        [data-testid="stFileUploader"] section,
+        [data-testid="stTextArea"] textarea {{
+            background-color: var(--graphature-field) !important;
+            border-color: var(--graphature-border-strong) !important;
+            color: var(--graphature-text) !important;
+        }}
         [data-baseweb="select"]:focus-within > div,
         [data-testid="stTextInput"] input:focus,
-        [data-testid="stFileUploader"] section:focus-within {
-            border-color: #0284c7 !important;
-            box-shadow: 0 0 0 3px #dbeafe !important;
-        }
+        [data-testid="stFileUploader"] section:focus-within,
+        [data-testid="stTextArea"] textarea:focus {{
+            border-color: var(--graphature-accent) !important;
+            box-shadow: 0 0 0 3px var(--graphature-accent-focus) !important;
+        }}
         .stDownloadButton button,
         .stButton button,
-        [data-testid="stFormSubmitButton"] button {
+        [data-testid="stFormSubmitButton"] button {{
             border-radius: 6px;
-            background: #e0f2fe !important;
-            border: 1px solid #7dd3fc !important;
-            color: #075985 !important;
-        }
+            background: var(--graphature-accent-soft) !important;
+            border: 1px solid var(--graphature-border-strong) !important;
+            color: var(--graphature-accent-strong) !important;
+        }}
         .stDownloadButton button:hover,
         .stButton button:hover,
-        [data-testid="stFormSubmitButton"] button:hover {
-            background: #bae6fd !important;
-            border-color: #38bdf8 !important;
-            color: #0c4a6e !important;
-        }
+        [data-testid="stFormSubmitButton"] button:hover {{
+            background: var(--graphature-button-hover) !important;
+            border-color: var(--graphature-accent) !important;
+            color: var(--graphature-accent-strong) !important;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
