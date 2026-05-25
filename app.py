@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 import streamlit as st
@@ -101,6 +102,11 @@ def main() -> None:
             with st.spinner("Reading Zotero library from a local snapshot..."):
                 papers = _load_zotero_papers_cached(source["zotero_path"], _file_signature_key(source["zotero_path"]))
             st.sidebar.caption(f"Loaded {len(papers)} Zotero items.")
+            if not papers:
+                st.sidebar.warning(
+                    "This Zotero database opened successfully, but no paper items were found. "
+                    "Check that the path points to the active Zotero profile, not an empty database."
+                )
         else:
             papers = _parse_bibtex_cached(source["bib_text"])
         manual_text = source["manual_text"]
@@ -164,7 +170,7 @@ def main() -> None:
         if graph_selected != selected_ids:
             _set_selected_ids(graph_selected)
 
-        table_selected = _papers_list(graph, selected_mode, source_fingerprint)
+        table_selected = _papers_list(graph, selected_mode, source_fingerprint, graph_theme)
         if table_selected:
             _set_selected_ids(table_selected)
 
@@ -180,7 +186,7 @@ def main() -> None:
     selected_paper_id = selected_ids[0] if selected_ids else None
     with right:
         st.markdown('<div class="detail-panel-anchor" aria-hidden="true">&nbsp;</div>', unsafe_allow_html=True)
-        _paper_detail(graph, selected_paper_id, selected_ids, facets)
+        _paper_detail(graph, selected_paper_id, selected_ids, facets, graph_theme)
 
 
 def _init_state() -> None:
@@ -297,7 +303,7 @@ def _sidebar_imports() -> dict[str, Any]:
         save_uploaded_text("library.bib", bib_text)
         source_label = bib_upload.name
     elif source_kind == "BibTeX file path" and bib_path.strip():
-        bib_file = Path(bib_path.strip()).expanduser()
+        bib_file = _local_path_from_input(bib_path)
         if bib_file.exists():
             bib_text = bib_file.read_text(encoding="utf-8", errors="replace")
             source_label = str(bib_file)
@@ -308,11 +314,13 @@ def _sidebar_imports() -> dict[str, Any]:
         source_label = "Sample data"
 
     if source_kind == "Zotero SQLite" and zotero_path.strip():
-        zotero_file = Path(zotero_path.strip()).expanduser()
-        if zotero_file.exists():
+        zotero_file = _local_path_from_input(zotero_path, default_filename="zotero.sqlite")
+        if zotero_file.exists() and zotero_file.is_file():
             source_label = str(zotero_file)
+            if _clean_local_path_text(zotero_path) != str(zotero_file):
+                import_panel.caption(f"Resolved database file: {zotero_file}")
             if import_panel.button("Load / refresh Zotero library", type="primary"):
-                st.session_state.zotero_loaded_path = str(zotero_file)
+                st.session_state.zotero_loaded_path = _path_key(zotero_file)
                 _load_zotero_papers_cached.clear()
         else:
             import_panel.warning(_server_path_missing_message("Zotero SQLite", zotero_file))
@@ -322,7 +330,7 @@ def _sidebar_imports() -> dict[str, Any]:
         suffix = Path(manual_upload.name).suffix or ".yaml"
         save_uploaded_text(f"manual_metadata{suffix}", manual_text)
     elif manual_path.strip():
-        metadata_file = Path(manual_path.strip()).expanduser()
+        metadata_file = _local_path_from_input(manual_path)
         if metadata_file.exists():
             manual_text = metadata_file.read_text(encoding="utf-8", errors="replace")
         else:
@@ -333,14 +341,15 @@ def _sidebar_imports() -> dict[str, Any]:
     zotero_loaded = (
         source_kind == "Zotero SQLite"
         and zotero_path.strip()
-        and st.session_state.get("zotero_loaded_path") == str(Path(zotero_path.strip()).expanduser())
+        and st.session_state.get("zotero_loaded_path")
+        == _path_key(_local_path_from_input(zotero_path, default_filename="zotero.sqlite"))
     )
 
     _save_source_config_update(
         {
             "source_kind": source_kind,
             "bibtex_path": bib_path.strip(),
-            "zotero_path": zotero_path.strip(),
+            "zotero_path": _clean_local_path_text(zotero_path),
             "manual_path": manual_path.strip(),
             "scan_pdfs": scan_pdfs,
         }
@@ -351,7 +360,9 @@ def _sidebar_imports() -> dict[str, Any]:
         "source_label": source_label,
         "bib_text": bib_text,
         "manual_text": manual_text,
-        "zotero_path": zotero_path.strip() if zotero_loaded else "",
+        "zotero_path": str(_local_path_from_input(zotero_path, default_filename="zotero.sqlite"))
+        if zotero_loaded
+        else "",
         "scan_pdfs": scan_pdfs,
     }
 
@@ -382,6 +393,38 @@ def _image_data_uri(path: Path) -> str:
         return ""
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _clean_local_path_text(value: object) -> str:
+    """Normalize pasted local path strings from text inputs."""
+
+    text = str(value or "").strip().strip("\"'`“”‘’")
+    if not text:
+        return ""
+
+    parsed = urlparse(text)
+    if parsed.scheme.lower() == "file":
+        if parsed.netloc:
+            text = f"//{parsed.netloc}{unquote(parsed.path)}"
+        else:
+            text = unquote(parsed.path)
+        if len(text) >= 3 and text[0] == "/" and text[2] == ":":
+            text = text[1:]
+    return text.strip().strip("\"'`“”‘’")
+
+
+def _local_path_from_input(value: object, default_filename: str | None = None) -> Path:
+    path = Path(_clean_local_path_text(value)).expanduser()
+    if default_filename and path.exists() and path.is_dir():
+        return path / default_filename
+    return path
+
+
+def _path_key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path.absolute())
 
 
 def _sidebar_theme_control() -> None:
@@ -517,10 +560,10 @@ def _sidebar_controls(
     return settings, filters, color_mode, graph_mode, graph_panel, export_panel
 
 
-def _papers_list(graph, selected_mode: str, source_fingerprint: str) -> list[str]:
+def _papers_list(graph, selected_mode: str, source_fingerprint: str, theme: str) -> list[str]:
     st.markdown("**Papers**")
     with st.expander("Graph metrics", expanded=False):
-        _graph_summary(graph, selected_mode)
+        _graph_summary(graph, selected_mode, theme)
 
     rows = _paper_rows(graph)
     if not rows:
@@ -531,7 +574,7 @@ def _papers_list(graph, selected_mode: str, source_fingerprint: str) -> list[str
     dataframe = pd.DataFrame(rows)
 
     table_event = st.dataframe(
-        dataframe,
+        _dataframe_for_theme(dataframe, theme),
         use_container_width=True,
         hide_index=True,
         height=380,
@@ -552,12 +595,16 @@ def _papers_list(graph, selected_mode: str, source_fingerprint: str) -> list[str
     )
 
     with st.expander("Cluster summary", expanded=False):
-        st.dataframe(pd.DataFrame(cluster_summary(graph)), use_container_width=True, hide_index=True)
+        st.dataframe(
+            _dataframe_for_theme(pd.DataFrame(cluster_summary(graph)), theme),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     return _node_ids_from_table_event(table_event, id_order)
 
 
-def _graph_summary(graph, selected_mode: str) -> None:
+def _graph_summary(graph, selected_mode: str, theme: str) -> None:
     clusters = len({data.get("cluster", -1) for _, data in graph.nodes(data=True)}) if graph.number_of_nodes() else 0
     citation_edges = sum(1 for _, _, data in graph.edges(data=True) if "cites" in data.get("edge_types", []))
     reference_sources = sum(
@@ -573,7 +620,7 @@ def _graph_summary(graph, selected_mode: str) -> None:
             {"Metric": "Mode", "Value": selected_mode},
         ]
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True, height=240)
+    st.dataframe(_dataframe_for_theme(summary, theme), use_container_width=True, hide_index=True, height=240)
 
 
 def _paper_rows(graph) -> list[dict[str, Any]]:
@@ -616,7 +663,13 @@ def _downloads(graph, graph_html: str, container: Any | None = None) -> None:
             st.toast("Saved to graphature_project/exports")
 
 
-def _paper_detail(graph, selected_paper_id: str | None, selected_ids: list[str], facets: dict[str, list]) -> None:
+def _paper_detail(
+    graph,
+    selected_paper_id: str | None,
+    selected_ids: list[str],
+    facets: dict[str, list],
+    theme: str,
+) -> None:
     st.subheader("Selected Paper")
     if not selected_paper_id or selected_paper_id not in graph:
         st.write("Select a paper in the graph or papers list.")
@@ -646,9 +699,40 @@ def _paper_detail(graph, selected_paper_id: str | None, selected_ids: list[str],
     st.markdown("**Connected Papers**")
     rows = edge_explanations_for_paper(graph, selected_paper_id)
     if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(_dataframe_for_theme(pd.DataFrame(rows), theme), use_container_width=True, hide_index=True)
     else:
         st.write("No visible connections under the current settings.")
+
+
+def _dataframe_for_theme(dataframe: pd.DataFrame, theme: str):
+    if theme != "dark":
+        return dataframe
+    return dataframe.style.set_properties(
+        **{
+            "background-color": "#0f172a",
+            "color": "#e5e7eb",
+            "border-color": "#334155",
+        }
+    ).set_table_styles(
+        [
+            {
+                "selector": "th",
+                "props": [
+                    ("background-color", "#111827"),
+                    ("color", "#e5e7eb"),
+                    ("border-color", "#334155"),
+                ],
+            },
+            {
+                "selector": "td",
+                "props": [
+                    ("background-color", "#0f172a"),
+                    ("color", "#e5e7eb"),
+                    ("border-color", "#334155"),
+                ],
+            },
+        ]
+    )
 
 
 def _single_paper_editor(paper, facets: dict[str, list]) -> None:
@@ -910,7 +994,7 @@ def _inject_css(theme: str) -> None:
             gap: 0.45rem;
         }}
         [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
-            padding: 0.75rem 0.75rem 1rem;
+            padding: 0.25rem 0.75rem 1rem;
         }}
         .app-brand-row {{
             display: grid;
@@ -973,7 +1057,19 @@ def _inject_css(theme: str) -> None:
         }}
         [data-testid="stDataFrame"] {{
             width: 100%;
+            overflow: hidden;
+            border: 1px solid var(--graphature-border);
+            border-radius: 8px;
+            background: var(--graphature-panel) !important;
             color-scheme: {color_scheme};
+        }}
+        [data-testid="stDataFrame"] canvas,
+        [data-testid="stDataFrame"] [role="grid"],
+        [data-testid="stDataFrame"] [role="row"],
+        [data-testid="stDataFrame"] [role="columnheader"],
+        [data-testid="stDataFrame"] [role="gridcell"] {{
+            background-color: var(--graphature-panel) !important;
+            color: var(--graphature-text) !important;
         }}
         [data-testid="stExpander"],
         [data-testid="stVerticalBlockBorderWrapper"] {{
