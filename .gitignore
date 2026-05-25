@@ -6,7 +6,9 @@ graphature_project/data/*.bib
 graphature_project/data/*.yaml
 graphature_project/data/*.yml
 graphature_project/data/*.json
+graphature_project/logs/*
 graphature_project/exports/*
 !graphature_project/exports/.gitkeep
 !graphature_project/data/.gitkeep
+!graphature_project/logs/.gitkeep
 !graphature_project/notes/.gitkeep

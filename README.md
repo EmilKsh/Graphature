@@ -23,11 +23,32 @@ streamlit run app.py
 
 The app includes sample BibTeX and manual metadata files, so it can start without your own library.
 
+## Desktop Window
+
+Graphature can also run as a standalone desktop-style window. It still uses the local Streamlit app internally, but a launcher starts the server on a private localhost port and opens it in its own WebView window instead of a browser tab.
+
+Install the requirements, then use either:
+
+```bash
+python graphature_desktop.py
+```
+
+On Windows, you can also double-click `Graphature.pyw` for a no-console launch, or run:
+
+```bat
+Graphature.cmd
+```
+
+When the desktop window closes, the launcher stops the Streamlit server. Launcher logs are written to `graphature_project/logs/desktop.log`.
+
 ## Repository Layout
 
 ```text
 Graphature/
   app.py
+  graphature_desktop.py
+  Graphature.pyw
+  Graphature.cmd
   requirements.txt
   README.md
   .streamlit/
@@ -51,6 +72,7 @@ Graphature/
   graphature_project/
     data/
     exports/
+    logs/
     notes/
 ```
 
