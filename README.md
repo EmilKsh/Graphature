@@ -1,4 +1,5 @@
 # Graphature
+<img width="1959" height="1108" alt="image" src="https://github.com/user-attachments/assets/522526b8-929e-4e71-9bc5-6eb10a78d569" />
 
 Graphature is a local-first Streamlit app for exploring a personal literature graph of academic papers. It imports your paper library, builds an explainable NetworkX graph, detects clusters, and renders an interactive graph plus a sortable papers table and detail panel.
 
