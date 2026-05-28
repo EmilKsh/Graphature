@@ -60,11 +60,11 @@
         top: 10px;
         left: 10px;
         z-index: 6;
-        max-width: min(320px, calc(100% - 88px));
-        max-height: calc(100% - 24px);
-        overflow-y: auto;
+        max-width: min(148px, calc(100% - 88px));
+        max-height: 34px;
+        overflow: hidden;
         flex-direction: column;
-        gap: 6px;
+        gap: 0;
         padding: 8px;
         border: 1px solid rgba(203, 213, 225, 0.92);
         border-radius: 8px;
@@ -73,6 +73,12 @@
         backdrop-filter: blur(8px);
         box-sizing: border-box;
         color: #0f172a;
+        cursor: default;
+        transition:
+          max-width 160ms ease,
+          max-height 160ms ease,
+          background 160ms ease,
+          box-shadow 160ms ease;
       }
 
       body.dark #graph-legend {
@@ -81,13 +87,24 @@
         color: #f8fafc;
       }
 
+      #graph-legend:hover {
+        max-width: min(320px, calc(100% - 88px));
+        max-height: calc(100% - 24px);
+        overflow-y: auto;
+        gap: 6px;
+        box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+      }
+
       .legend-title {
-        padding: 0 2px 2px;
+        overflow: hidden;
+        padding: 0 2px;
         color: #075985;
         font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.03em;
         text-transform: uppercase;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       body.dark .legend-title {
@@ -106,6 +123,10 @@
         background: rgba(248, 251, 255, 0.92);
         font-size: 12px;
         line-height: 1.15;
+      }
+
+      #graph-legend:not(:hover) .legend-item {
+        display: none;
       }
 
       body.dark .legend-item {
@@ -199,6 +220,8 @@
       const selectionBox = document.getElementById("selection-box");
       const legendContainer = document.getElementById("graph-legend");
       const recenterButton = document.getElementById("recenter-button");
+      const CENTER_NODE_ID = "__graphature_center_anchor__";
+      const CENTER_EDGE_PREFIX = "__graphature_center_edge__";
 
       let network = null;
       let nodes = new vis.DataSet([]);
@@ -209,6 +232,7 @@
       let currentGraphKey = null;
       let lastRenderArgs = null;
       let resizeFrame = null;
+      let lastContainmentAt = 0;
 
       function sendMessage(type, payload) {
         window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
@@ -227,7 +251,7 @@
       }
 
       function normalizeSelected(ids) {
-        return Array.from(new Set((ids || []).map(String)));
+        return Array.from(new Set((ids || []).map(String).filter((id) => id !== CENTER_NODE_ID)));
       }
 
       function updateValue() {
@@ -357,6 +381,140 @@
         });
       }
 
+      function centerSpringLength(nodeCount) {
+        return Math.max(360, Math.min(760, 260 + Math.sqrt(Math.max(1, nodeCount)) * 42));
+      }
+
+      function containmentRadius(nodeCount) {
+        return Math.max(560, Math.min(1800, 360 + Math.sqrt(Math.max(1, nodeCount)) * 92));
+      }
+
+      function withCenterAnchor(nodeRows, edgeRows) {
+        const realNodes = Array.isArray(nodeRows) ? nodeRows : [];
+        const realEdges = Array.isArray(edgeRows) ? edgeRows : [];
+        if (realNodes.length === 0) {
+          return { nodes: realNodes, edges: realEdges };
+        }
+
+        const centerNode = {
+          id: CENTER_NODE_ID,
+          label: "",
+          shape: "dot",
+          size: 1,
+          x: 0,
+          y: 0,
+          fixed: { x: true, y: true },
+          physics: false,
+          borderWidth: 0,
+          color: {
+            background: "rgba(0, 0, 0, 0)",
+            border: "rgba(0, 0, 0, 0)",
+            highlight: { background: "rgba(0, 0, 0, 0)", border: "rgba(0, 0, 0, 0)" },
+          },
+          font: { size: 0 },
+          chosen: false,
+        };
+        const length = centerSpringLength(realNodes.length);
+        const anchorEdges = realNodes.map((node) => ({
+          id: `${CENTER_EDGE_PREFIX}${String(node.id)}`,
+          from: CENTER_NODE_ID,
+          to: String(node.id),
+          length,
+          physics: true,
+          smooth: false,
+          width: 0,
+          selectionWidth: 0,
+          hoverWidth: 0,
+          color: {
+            color: "rgba(0, 0, 0, 0)",
+            highlight: "rgba(0, 0, 0, 0)",
+            hover: "rgba(0, 0, 0, 0)",
+          },
+          title: "",
+          chosen: false,
+        }));
+
+        return { nodes: [...realNodes, centerNode], edges: [...realEdges, ...anchorEdges] };
+      }
+
+      function realNodeIds() {
+        return nodes.getIds().map(String).filter((id) => id !== CENTER_NODE_ID);
+      }
+
+      function containEscapedNodes(force = false) {
+        if (!network) {
+          return;
+        }
+        const now = Date.now();
+        if (!force && now - lastContainmentAt < 280) {
+          return;
+        }
+        lastContainmentAt = now;
+
+        const ids = realNodeIds();
+        const radius = containmentRadius(ids.length);
+        const positions = network.getPositions(ids);
+        let moved = false;
+
+        ids.forEach((id) => {
+          const position = positions[id];
+          if (!position) {
+            return;
+          }
+          const distance = Math.hypot(position.x, position.y);
+          if (distance <= radius || distance === 0) {
+            return;
+          }
+          const scale = radius / distance;
+          network.moveNode(id, position.x * scale, position.y * scale);
+          moved = true;
+        });
+
+        if (moved) {
+          network.redraw();
+        }
+      }
+
+      function drawReadMarkers(ctx) {
+        if (!network) {
+          return;
+        }
+        nodes.get().forEach((node) => {
+          if (node.id === CENTER_NODE_ID || !node.read_status) {
+            return;
+          }
+          const position = network.getPosition(node.id);
+          if (!position) {
+            return;
+          }
+
+          const nodeRadius = numberArg(node.size, 18);
+          const markerRadius = Math.max(5.5, Math.min(8.5, nodeRadius * 0.34));
+          const x = position.x + nodeRadius * 0.72;
+          const y = position.y - nodeRadius * 0.72;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(x, y, markerRadius, 0, Math.PI * 2);
+          ctx.fillStyle = "#22c55e";
+          ctx.fill();
+          ctx.lineWidth = 1.2;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(x - markerRadius * 0.44, y - markerRadius * 0.02);
+          ctx.lineTo(x - markerRadius * 0.12, y + markerRadius * 0.34);
+          ctx.lineTo(x + markerRadius * 0.5, y - markerRadius * 0.38);
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.lineWidth = Math.max(1.6, markerRadius * 0.24);
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+          ctx.restore();
+        });
+      }
+
       function renderLegend(rows, title) {
         legendContainer.replaceChildren();
         if (!Array.isArray(rows) || rows.length === 0) {
@@ -366,7 +524,7 @@
 
         const titleNode = document.createElement("div");
         titleNode.className = "legend-title";
-        titleNode.textContent = title || "Legend";
+        titleNode.textContent = `${title || "Legend"} (${rows.length})`;
         legendContainer.appendChild(titleNode);
 
         rows.forEach((row) => {
@@ -441,6 +599,9 @@
         } else {
           const positions = network.getPositions();
           Object.entries(positions).forEach(([id, pos]) => {
+            if (id === CENTER_NODE_ID) {
+              return;
+            }
             if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
               next.add(String(id));
             }
@@ -467,8 +628,9 @@
         }
 
         currentGraphKey = args.graph_key || null;
-        nodes = new vis.DataSet(args.nodes || []);
-        edges = new vis.DataSet(args.edges || []);
+        const anchoredGraph = withCenterAnchor(args.nodes || [], args.edges || []);
+        nodes = new vis.DataSet(anchoredGraph.nodes);
+        edges = new vis.DataSet(anchoredGraph.edges);
         selectedIds = normalizeSelected(args.selected_ids || []);
 
         const options = {
@@ -489,15 +651,15 @@
             enabled: true,
             solver: "barnesHut",
             barnesHut: {
-              gravitationalConstant: -3600,
-              centralGravity: 0.34,
-              springLength: 132,
-              springConstant: 0.055,
-              damping: 0.22,
-              avoidOverlap: 0.12,
+              gravitationalConstant: -2800,
+              centralGravity: 0.62,
+              springLength: 118,
+              springConstant: 0.05,
+              damping: 0.3,
+              avoidOverlap: 0.14,
             },
-            stabilization: { enabled: true, iterations: 260, fit: true },
-            minVelocity: 0.25,
+            stabilization: { enabled: true, iterations: 340, fit: true },
+            minVelocity: 0.18,
           },
           nodes: {
             shape: "dot",
@@ -531,6 +693,11 @@
         window.graphatureEdges = edges;
         window.graphatureSyncSelection = syncSelection;
         syncSelection(selectedIds, false);
+
+        network.on("afterDrawing", drawReadMarkers);
+        network.on("stabilizationProgress", () => containEscapedNodes(false));
+        network.once("stabilized", () => containEscapedNodes(true));
+        network.on("dragEnd", () => containEscapedNodes(false));
 
         network.on("click", (params) => {
           const sourceEvent = params.event && params.event.srcEvent;

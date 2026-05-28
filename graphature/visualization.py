@@ -76,6 +76,7 @@ def graph_to_vis_data(
                 "title": _paper_tooltip(paper, data),
                 "value": max(1.0, float(degree)),
                 "size": size,
+                "read_status": bool(getattr(paper, "read_status", False)),
                 "color": {
                     "background": color,
                     "border": border_color,
@@ -140,7 +141,7 @@ def generate_pyvis_html(
     """Generate an interactive PyVis HTML graph."""
 
     net = Network(height=height, width="100%", bgcolor="#ffffff", font_color="#1f2933", cdn_resources="in_line")
-    net.barnes_hut(gravity=-3600, central_gravity=0.34, spring_length=132, spring_strength=0.055, damping=0.22)
+    net.barnes_hut(gravity=-2800, central_gravity=0.62, spring_length=118, spring_strength=0.05, damping=0.3)
 
     color_lookup = _color_lookup(graph, color_mode)
 
@@ -191,15 +192,15 @@ def generate_pyvis_html(
                 },
                 "physics": {
                     "barnesHut": {
-                        "gravitationalConstant": -3600,
-                        "centralGravity": 0.34,
-                        "springLength": 132,
-                        "springConstant": 0.055,
-                        "damping": 0.22,
-                        "avoidOverlap": 0.12,
+                        "gravitationalConstant": -2800,
+                        "centralGravity": 0.62,
+                        "springLength": 118,
+                        "springConstant": 0.05,
+                        "damping": 0.3,
+                        "avoidOverlap": 0.14,
                     },
-                    "stabilization": {"iterations": 260, "fit": True},
-                    "minVelocity": 0.25,
+                    "stabilization": {"iterations": 340, "fit": True},
+                    "minVelocity": 0.18,
                 },
             }
         )

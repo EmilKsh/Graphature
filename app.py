@@ -52,7 +52,7 @@ VIS_GRAPH = components.declare_component(
     "graphature_vis_graph_v2",
     path=str(ROOT / "graphature" / "components" / "vis_graph" / "frontend"),
 )
-GRAPH_VISUAL_VERSION = "theme-sync-v1"
+GRAPH_VISUAL_VERSION = "read-marker-center-force-v1"
 DEFAULT_GRAPH_THEME = "light"
 THEME_OPTIONS = {
     "Light": "light",
@@ -853,6 +853,7 @@ def _graph_key(graph, color_mode: str, graph_theme: str) -> str:
                 "tags": getattr(paper, "tags", []),
                 "collections": getattr(paper, "collections", []),
                 "year": getattr(paper, "year", None),
+                "read_status": bool(getattr(paper, "read_status", False)),
                 "cluster": data.get("cluster", -1),
                 "degree": float(graph.degree(node_id, weight="weight")),
             }
